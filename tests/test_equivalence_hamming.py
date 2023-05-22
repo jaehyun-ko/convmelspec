@@ -12,12 +12,13 @@ import unittest
 import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-import torch
 import librosa
+import torch
 import numpy as np
 from scipy import signal as sig
 import tempfile
 import torchaudio
+import torch.nn as nn
 
 from convmelspec.stft import ConvertibleSpectrogram as Spectrogram
 from convmelspec.mil import *
@@ -25,7 +26,7 @@ from convmelspec.mil import *
 BATCH_SIZE = 1
 MEL_BANDS = 80
 LABEL_DIM = 527
-FFT_SIZE = 400
+FFT_SIZE = 512
 WIN_LENGTH = 400
 HOP_SIZE = 160
 F_MIN = 20
@@ -35,9 +36,11 @@ SR = 16000
 DEVICE = "cpu"
 
 
-def get_hann_torch(win_size, sym=True):
-    wn = sig.windows.hann(win_size, sym=sym).astype(np.float32)
-    return torch.from_numpy(wn)
+wn = torch.hamming_window(WIN_LENGTH)
+win_pad_size = int((FFT_SIZE-WIN_LENGTH)/2)
+padder = nn.ConstantPad1d((win_pad_size,win_pad_size), 0)
+WINDOW = padder(wn)
+
 
 
 class TestEquivalence(unittest.TestCase):
@@ -63,7 +66,7 @@ class TestEquivalence(unittest.TestCase):
 
     def test_melpec_vs_torchaudio(self):
 
-        wn = sig.windows.hann(FFT_SIZE, sym=True)
+        wn = WINDOW
 
         # Create PyTorch STFT layer
         stft = Spectrogram(
@@ -98,8 +101,8 @@ class TestEquivalence(unittest.TestCase):
         x[0, :] = torch.from_numpy(self.audio[: x.shape[1]])
         x = x.to(DEVICE)
 
-        window_fn = get_hann_torch
-
+        window_fn = torch.hamming_window
+        
         # Create torchaudio power spec + mel spec from individual parts
         spec_layer = torchaudio.transforms.Spectrogram(
             n_fft=FFT_SIZE,
@@ -119,9 +122,9 @@ class TestEquivalence(unittest.TestCase):
         )
         melspec_layer.to(DEVICE)
 
-        S2_librosa = spec_layer(x[0, :]).to("cpu")
+        S2_torch = spec_layer(x[0, :]).to("cpu")
 
-        M_librosa = melspec_layer(x[0, :]).to("cpu")
+        M_torch = melspec_layer(x[0, :]).to("cpu")
 
         S2_gpu = stft(x, power=True).to("cpu")
         M_gpu = melstft(x, power=True).to("cpu")
@@ -129,8 +132,10 @@ class TestEquivalence(unittest.TestCase):
         S2_gpu = S2_gpu.detach().cpu().numpy()[0, :, :]
         M_gpu = M_gpu.detach().cpu().numpy()[0, :, :]
 
-        self.assertTrue(np.allclose(S2_librosa, S2_gpu, atol=1e-04))
-        self.assertTrue(np.allclose(M_librosa, M_gpu, atol=1e-05))
+        self.assertTrue(np.allclose(S2_torch, S2_gpu, atol=1e-07))
+        self.assertTrue(np.allclose(M_torch, M_gpu, atol=1e-07))
+        # self.assertTrue(np.allclose(, 0, atol=1e-07))
+        
 
    
 
